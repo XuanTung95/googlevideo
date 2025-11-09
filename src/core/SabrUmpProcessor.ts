@@ -147,7 +147,9 @@ export class SabrUmpProcessor {
     const targetFormatKey = fromFormat(this.requestMetadata.format);
     const segmentFormatKey = fromMediaHeader(mediaHeader);
 
-    if (!this.requestMetadata.isSABR || segmentFormatKey === targetFormatKey) {
+    const sameKey = segmentFormatKey === targetFormatKey || targetFormatKey?.includes(segmentFormatKey) || (targetFormatKey != null && segmentFormatKey?.includes(targetFormatKey));
+
+    if (!this.requestMetadata.isSABR || sameKey) {
       const segmentObj = {
         headerId: mediaHeader.headerId,
         mediaHeader: mediaHeader,

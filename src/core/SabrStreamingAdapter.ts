@@ -253,6 +253,13 @@ export class SabrStreamingAdapter {
         videoPlaybackAbrRequest.selectedFormatIds.push(currentFormat);
       }
 
+      this.addPreferredFormatIds(
+        videoPlaybackAbrRequest,
+        this.sabrFormats,
+        currentFormat,
+        activeFormats
+      );
+
       if (this.options.enableVerboseRequestLogging)
         this.logger.debug(TAG, `Created VideoPlaybackAbrRequest (${requestNumber}):`, videoPlaybackAbrRequest);
 
@@ -367,6 +374,47 @@ export class SabrStreamingAdapter {
     };
   }
 
+  private addPreferredFormatIds(
+    videoPlaybackAbrRequest: VideoPlaybackAbrRequest,
+    sabrFormats: SabrFormat[],
+    currentFormat: SabrFormat,
+    activeFormats: {
+      audioFormat?: SabrFormat;
+      videoFormat?: SabrFormat;
+    }
+  ) {
+    const allFormats: SabrFormat[] = sabrFormats.filter((item) => {
+      return (
+        item.itag === currentFormat.itag ||
+        item.itag === activeFormats?.audioFormat?.itag ||
+        item.itag === activeFormats?.videoFormat?.itag
+      );
+    });
+
+    const videoIds: FormatId[] = allFormats
+      .filter((item) => item.height != null)
+      .map((item) => {
+        return {
+          itag: item.itag,
+          lastModified: item.lastModified,
+          xtags: item.xtags ?? ''
+        };
+      });
+
+    const audioIds: FormatId[] = allFormats
+      .filter((item) => item.height == null)
+      .map((item) => {
+        return {
+          itag: item.itag,
+          lastModified: item.lastModified,
+          xtags: item.xtags ?? ''
+        };
+      });
+
+    videoPlaybackAbrRequest.preferredVideoFormatIds = videoIds;
+    videoPlaybackAbrRequest.preferredAudioFormatIds = audioIds;
+  }
+
   /**
    * Adds buffering information to the ABR request for all active formats.
    * 
@@ -401,7 +449,8 @@ export class SabrStreamingAdapter {
       const shouldDiscard = currentFormatKey !== activeFormatKey;
       const initializedFormat = this.initializedFormats.get(activeFormatKey || '');
       
-      const bufferedRange = shouldDiscard
+      const forceDisable = false;
+      const bufferedRange = (shouldDiscard && forceDisable)
         ? this.createFullBufferRange(activeFormat)
         : this.createPartialBufferRange(initializedFormat);
 
