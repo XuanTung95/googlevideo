@@ -49,6 +49,7 @@ message ClientAbrState {
   optional int32 field67 = 67;
   optional int64 sabr_force_max_network_interruption_duration_ms = 68;
   optional string audio_track_id = 69;
+  optional int32 field71 = 71;
   optional bool enable_voice_boost = 76;
   optional .misc.PlaybackAuthorization playback_authorization = 79;
 }

@@ -104,7 +104,7 @@ export function concatenateChunks(chunks: Uint8Array[]): Uint8Array {
 export function buildSabrFormat(formatStream: FormatStream): SabrFormat {
   return {
     itag: formatStream.itag,
-    lastModified: formatStream.last_modified_ms || formatStream.lastModified || '0',
+    lastModified: Number(formatStream.last_modified_ms || formatStream.lastModified || '0'),
     xtags: formatStream.xtags,
     width: formatStream.width,
     height: formatStream.height,

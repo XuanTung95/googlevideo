@@ -531,7 +531,7 @@ export class SabrStream extends EventEmitterLike {
       if (downloadedDurationCloseness < 5000) {
         this.logger.warn(TAG, 'Stream is close to completion, but stalled. Checking if we have the last segment.');
 
-        const endSegmentNumber = parseInt(this.mainFormat?.formatInitializationMetadata.endSegmentNumber || '0') || -1;
+        const endSegmentNumber = (this.mainFormat?.formatInitializationMetadata.endSegmentNumber || 0) || -1;
         const lastSegment = this.mainFormat?.downloadedSegments.get(endSegmentNumber);
        
         if (lastSegment && lastSegment.segmentNumber === endSegmentNumber) {
@@ -654,16 +654,16 @@ export class SabrStream extends EventEmitterLike {
       }
 
       const mediaHeaders = initializedFormat.lastMediaHeaders;
-      const durationMs = mediaHeaders.reduce((sum, header) => sum + (parseInt(header.durationMs || '0')), 0);
+      const durationMs = mediaHeaders.reduce((sum, header) => sum + ((header.durationMs || 0)), 0);
 
       bufferedRanges.push({
-        durationMs: durationMs.toString(),
+        durationMs: durationMs,
         formatId: initializedFormat.formatInitializationMetadata.formatId,
-        startTimeMs: String(mediaHeaders[0].startMs || '0'),
+        startTimeMs: (mediaHeaders[0].startMs || 0),
         startSegmentIndex: mediaHeaders[0].sequenceNumber || 1,
         endSegmentIndex: mediaHeaders[mediaHeaders.length - 1].sequenceNumber || 1,
         timeRange: {
-          durationTicks: durationMs.toString(),
+          durationTicks: durationMs,
           startTicks: mediaHeaders[0].startMs,
           timescale: mediaHeaders[0].timeRange?.timescale
         }
@@ -763,13 +763,13 @@ export class SabrStream extends EventEmitterLike {
       if (shouldDiscard) {
         updatedBufferedRanges.push({
           formatId: format,
-          durationMs: MAX_INT32_VALUE,
-          startTimeMs: String(0),
+          durationMs: Number(MAX_INT32_VALUE),
+          startTimeMs: (0),
           startSegmentIndex: parseInt(MAX_INT32_VALUE),
           endSegmentIndex: parseInt(MAX_INT32_VALUE),
           timeRange: {
-            durationTicks: MAX_INT32_VALUE,
-            startTicks: '0',
+            durationTicks: Number(MAX_INT32_VALUE),
+            startTicks: 0,
             timescale: 1000
           }
         });
@@ -1112,7 +1112,7 @@ export class SabrStream extends EventEmitterLike {
     const headerId = mediaHeader.headerId || 0;
     const formatIdKey = FormatKeyUtils.fromMediaHeader(mediaHeader);
     const segmentNumber = mediaHeader.isInitSeg ? 0 : mediaHeader.sequenceNumber || 0;
-    const durationMs = mediaHeader.durationMs || Math.ceil((parseInt(mediaHeader.timeRange?.durationTicks || '0') / (mediaHeader.timeRange?.timescale || 0)) * 1000).toString();
+    const durationMs = mediaHeader.durationMs || Math.ceil(((mediaHeader.timeRange?.durationTicks || 0) / (mediaHeader.timeRange?.timescale || 0)) * 1000);
 
     const initializedFormat = this.initializedFormatsMap.get(formatIdKey);
     if (!initializedFormat) {
@@ -1130,7 +1130,7 @@ export class SabrStream extends EventEmitterLike {
     this.partialSegmentQueue.set(headerId, {
       formatIdKey,
       segmentNumber,
-      durationMs,
+      durationMs: durationMs.toString(),
       mediaHeader,
       bufferedChunks: []
     });
@@ -1182,7 +1182,7 @@ export class SabrStream extends EventEmitterLike {
 
     const loadedBytes = segment.bufferedChunks.reduce((sum, chunk) => sum + chunk.length, 0);
 
-    if (loadedBytes !== parseInt(segment.mediaHeader.contentLength || '0')) {
+    if (loadedBytes !== (segment.mediaHeader.contentLength || 0)) {
       this.logger.warn(TAG, `Content length mismatch for segment ${segment.segmentNumber} (Header ID: ${headerId}, key: ${segment.formatIdKey}, expected: ${segment.mediaHeader.contentLength}, received: ${loadedBytes})`);
       this.partialSegmentQueue.delete(headerId);
       return;
@@ -1223,8 +1223,8 @@ export class SabrStream extends EventEmitterLike {
    * @private
    */
   private validateAndCorrectDuration(formatInitializationMetadata: FormatInitializationMetadata): void {
-    const durationUnits = parseInt(formatInitializationMetadata.durationUnits || '0');
-    const durationTimescale = parseInt(formatInitializationMetadata.durationTimescale || '0');
+    const durationUnits = (formatInitializationMetadata.durationUnits || 0);
+    const durationTimescale = (formatInitializationMetadata.durationTimescale || 0);
 
     if (durationTimescale === 0) {
       this.logger.warn(TAG, 'Invalid timescale (0) in format initialization metadata');
@@ -1252,8 +1252,8 @@ export class SabrStream extends EventEmitterLike {
       }
 
       const totalDuration = getTotalDownloadedDuration(initializedFormat);
-      const durationUnits = parseInt(initializedFormat.formatInitializationMetadata.durationUnits || '0');
-      const durationTimescale = parseInt(initializedFormat.formatInitializationMetadata.durationTimescale || '0');
+      const durationUnits = (initializedFormat.formatInitializationMetadata.durationUnits || 0);
+      const durationTimescale = (initializedFormat.formatInitializationMetadata.durationTimescale || 0);
       const expectedDuration = durationTimescale ? durationUnits / (durationTimescale / 1000) : 0;
 
       const durationMismatch = Math.abs(totalDuration - expectedDuration);
@@ -1267,7 +1267,7 @@ export class SabrStream extends EventEmitterLike {
 
       segments.sort(([ numA ], [ numB ]) => numA - numB);
 
-      const expectedSegmentCount = parseInt(initializedFormat.formatInitializationMetadata.endSegmentNumber || '0');
+      const expectedSegmentCount = (initializedFormat.formatInitializationMetadata.endSegmentNumber || 0);
       const missingSegments = [];
 
       // Find all missing segments in the expected range.
