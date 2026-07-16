@@ -30,6 +30,22 @@ interface Segment {
   lastChunkSize: number;
 }
 
+/** A fully assembled media segment and the header that identifies it. */
+export interface CompletedUmpSegment {
+  /** Decoded YouTube metadata used to identify format, range, time, and video. */
+  mediaHeader: MediaHeader;
+  /** Complete raw bytes assembled from all MEDIA parts for this header ID. */
+  data: Uint8Array;
+}
+
+/** Optional behavior used by adapters that coordinate several segment consumers. */
+export interface SabrUmpProcessorOptions {
+  /** Receive every complete media segment carried by the UMP response. */
+  onSegment?: (segment: CompletedUmpSegment) => void;
+  /** Keep parsing after the segment requested by Shaka has completed. */
+  collectAllSegments?: boolean;
+}
+
 export interface UmpProcessingResult {
   data?: Uint8Array;
   done: boolean;
@@ -45,9 +61,13 @@ type UmpPartHandler = (part: Part) => UmpProcessingResult | undefined;
  * implementations.
  */
 export class SabrUmpProcessor {
+  /** Incomplete UMP part carried across network chunk boundaries. */
   public partialPart?: Part;
+  /** Initialization metadata observed anywhere in the current UMP response. */
   private readonly formatInitMetadata: FormatInitializationMetadata[] = [];
+  /** Header ID matching the request that created this processor. */
   private desiredHeaderId?: number;
+  /** Segment bodies currently being assembled, indexed by UMP media header ID. */
   private partialSegments = new Map<number, Segment>();
 
   private readonly umpPartHandlers = new Map<UMPPartId, UmpPartHandler>([
@@ -67,7 +87,8 @@ export class SabrUmpProcessor {
 
   constructor(
     private requestMetadata: SabrRequestMetadata,
-    private cacheManager?: CacheManager
+    private cacheManager?: CacheManager,
+    private options: SabrUmpProcessorOptions = {}
   ) { }
 
   /**
@@ -91,10 +112,15 @@ export class SabrUmpProcessor {
       this.partialPart = ump.read((part: Part) => {
         const handler = this.umpPartHandlers.get(part.type);
         const result = handler?.(part);
-        if (result) {
+        // A non-terminal result means the desired segment completed, but callers
+        // in collect-all mode still want later MEDIA parts from this response.
+        // Only terminal protocol directives are allowed to reset parser state.
+        if (result?.done) {
           this.partialPart = undefined;
           this.desiredHeaderId = undefined;
           this.partialSegments.clear();
+          resolve(result);
+        } else if (result) {
           resolve(result);
         }
       });
@@ -103,10 +129,12 @@ export class SabrUmpProcessor {
     });
   }
 
+  /** Returns assembly/progress information for the requested segment, if active. */
   public getSegmentInfo(): Segment | undefined {
     return this.partialSegments.get(this.desiredHeaderId || 0);
   }
 
+  /** Decodes one protobuf UMP part, treating malformed/incomplete data as absent. */
   private decodePart<T>(part: Part, decoder: { decode: (data: Uint8Array) => T }): T | undefined {
     if (!part.data.chunks.length)
       return undefined;
@@ -137,6 +165,7 @@ export class SabrUmpProcessor {
     return undefined;
   }
 
+  /** Registers a new segment assembly when a MEDIA_HEADER part is received. */
   private handleMediaHeader(part: Part) {
     const mediaHeader = this.decodePart(part, MediaHeader);
 
@@ -149,7 +178,10 @@ export class SabrUmpProcessor {
 
     const sameKey = segmentFormatKey === targetFormatKey || targetFormatKey?.includes(segmentFormatKey) || (targetFormatKey != null && segmentFormatKey?.includes(targetFormatKey));
 
-    if (!this.requestMetadata.isSABR || sameKey) {
+    // Legacy mode only buffers the requested format to minimize memory. The
+    // coordinator's collect-all mode needs every format because a single SABR
+    // response commonly contains both audio and video segments.
+    if (this.options.collectAllSegments || !this.requestMetadata.isSABR || sameKey) {
       const segmentObj = {
         headerId: mediaHeader.headerId,
         mediaHeader: mediaHeader,
@@ -157,7 +189,7 @@ export class SabrUmpProcessor {
         lastChunkSize: 0
       };
 
-      if (this.desiredHeaderId === undefined) {
+      if (this.desiredHeaderId === undefined && (sameKey || !this.requestMetadata.isSABR)) {
         this.desiredHeaderId = mediaHeader.headerId;
       }
 
@@ -167,6 +199,7 @@ export class SabrUmpProcessor {
     return undefined;
   }
 
+  /** Appends a MEDIA part's payload to the assembly referenced by its header ID. */
   private handleMedia(part: Part) {
     const headerId = part.data.getUint8(0);
     const buffer = part.data.split(1).remainingBuffer;
@@ -183,12 +216,24 @@ export class SabrUmpProcessor {
     return undefined;
   }
 
+  /** Finalizes one assembly, emits it, and optionally completes the desired request. */
   private handleMediaEnd(part: Part): UmpProcessingResult | undefined {
     const headerId = part.data.getUint8(0);
     const segment = this.partialSegments.get(headerId);
 
-    if (segment && segment.headerId === this.desiredHeaderId) {
+    if (segment) {
       const segmentData = concatenateChunks(segment.bufferedChunks);
+
+      // Delete before notifying the adapter so completed segment bytes are no
+      // longer retained by the parser while the adapter dispatches/caches them.
+      this.partialSegments.delete(headerId);
+      this.options.onSegment?.({ mediaHeader: segment.mediaHeader, data: segmentData });
+
+      // Non-desired formats are still emitted through onSegment in collect-all
+      // mode, but they must not overwrite requestMetadata for the leader request.
+      if (segment.headerId !== this.desiredHeaderId) {
+        return undefined;
+      }
 
       this.requestMetadata.streamInfo = {
         ...this.requestMetadata.streamInfo,
@@ -211,13 +256,13 @@ export class SabrUmpProcessor {
 
         return {
           data: segmentData.slice(this.requestMetadata.byteRange.start, this.requestMetadata.byteRange.end + 1),
-          done: true
+          done: !this.options.collectAllSegments
         };
       }
 
       return {
         data: segmentData,
-        done: true
+        done: !this.options.collectAllSegments
       };
     }
   }
