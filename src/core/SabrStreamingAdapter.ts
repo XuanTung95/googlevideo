@@ -311,15 +311,8 @@ export class SabrStreamingAdapter {
     this.addBufferingInfoToAbrRequest(videoPlaybackAbrRequest, currentFormat, activeFormats);
 
     const companionFormat = currentFormat.width ? activeFormats.audioFormat : activeFormats.videoFormat;
-
-    // Always request the format that caused this logical Shaka request,
-    // including init segments. The previous behavior selected only the
-    // companion for init requests, causing a video-init request to ask for
-    // audio (and vice versa) and forcing another physical API call.
-    this.addSelectedFormat(videoPlaybackAbrRequest, currentFormat);
-    if (companionFormat) {
-      this.addSelectedFormat(videoPlaybackAbrRequest, companionFormat);
-    }
+    if (companionFormat) videoPlaybackAbrRequest.selectedFormatIds.push(companionFormat);
+    if (!request.segment.isInit()) videoPlaybackAbrRequest.selectedFormatIds.push(currentFormat);
 
     this.addPreferredFormatIds(videoPlaybackAbrRequest, this.sabrFormats, currentFormat, activeFormats);
 
@@ -335,13 +328,6 @@ export class SabrStreamingAdapter {
       headers: request.headers,
       body: VideoPlaybackAbrRequest.encode(videoPlaybackAbrRequest).finish()
     };
-  }
-
-  /** Adds one selected format exactly once, keyed by itag + xtags. */
-  private addSelectedFormat(request: VideoPlaybackAbrRequest, format: SabrFormat): void {
-    const key = fromFormat(format);
-    const exists = request.selectedFormatIds.some((selected) => fromFormat(selected) === key);
-    if (!exists) request.selectedFormatIds.push(format);
   }
 
   /**
