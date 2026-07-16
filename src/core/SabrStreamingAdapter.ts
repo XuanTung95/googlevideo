@@ -208,9 +208,6 @@ export class SabrStreamingAdapter {
     const originalUri = new URL(request.url);
 
     if (originalUri.protocol === SABR_CONSTANTS.PROTOCOL) {
-      if (this.activeDelayPromise)
-        await this.activeDelayPromise;
-
       if (!this.serverAbrStreamingUrl) {
         throw new SabrAdapterError('Server ABR URL not set.');
       }
@@ -221,7 +218,8 @@ export class SabrStreamingAdapter {
 
       const requestNumber = String(this.requestNumber++);
 
-      // Set the request number in the URL so we can identify it later (and also for the server).
+      // A real HTTP URL is required so Shaka can pass the request to its
+      // networking scheme. The URL/body are rebuilt lazily before fetch.
       const sabrUrl = new URL(this.serverAbrStreamingUrl || '');
       sabrUrl.searchParams.set('rn', requestNumber);
       request.url = sabrUrl.toString();
@@ -233,54 +231,13 @@ export class SabrStreamingAdapter {
       if (!currentFormat)
         throw new SabrAdapterError(`Could not determine current format from URL: ${request.url}`);
 
-      /**
-       * If the player's current time is earlier than the last recorded time (e.g., the user seeks backward), we clear the initialized format metadata.
-       * This prevents the adapter from using stale data, which could lead to requesting segments that are ahead of the new playback position.
-       */
-      if (this.playerAdapter.getPlayerTime() < this.lastPlayerTimeSecs) {
-        this.initializedFormats.clear();
-      }
-      
-      const activeFormats = this.playerAdapter.getActiveTrackFormats(currentFormat, this.sabrFormats);
-      const videoPlaybackAbrRequest = await this.createVideoPlaybackAbrRequest(request, currentFormat, activeFormats);
-
-      if (currentFormat.height) {
-        videoPlaybackAbrRequest.clientAbrState!.stickyResolution = currentFormat.height;
-        videoPlaybackAbrRequest.clientAbrState!.lastManualSelectedResolution = currentFormat.height;
-      }
-
-      this.addBufferingInfoToAbrRequest(videoPlaybackAbrRequest, currentFormat, activeFormats);
-
-      // A SABR call should request the current track plus its active companion
-      // (audio for a video request, video for an audio request). Do not select an
-      // old rendition of the same track during a quality/language switch.
-      const companionFormat = currentFormat.width ? activeFormats.audioFormat : activeFormats.videoFormat;
-      if (companionFormat) {
-        videoPlaybackAbrRequest.selectedFormatIds.push(companionFormat);
-      }
-
-      if (!request.segment.isInit()) {
-        videoPlaybackAbrRequest.selectedFormatIds.push(currentFormat);
-      }
-
-      this.addPreferredFormatIds(
-        videoPlaybackAbrRequest,
-        this.sabrFormats,
-        currentFormat,
-        activeFormats
-      );
-
-      if (this.options.enableVerboseRequestLogging)
-        this.logger.debug(TAG, `Created VideoPlaybackAbrRequest (${requestNumber}):`, videoPlaybackAbrRequest);
-
-      request.body = VideoPlaybackAbrRequest.encode(videoPlaybackAbrRequest).finish();
-
       this.requestMetadataManager.metadataMap.set(requestNumber, {
         format: currentFormat,
         isUMP: true,
         isSABR: true,
         isInit: request.segment.isInit(),
         byteRange: parseRangeHeader(request.headers.Range),
+        materializeRequest: () => this.materializeSabrRequest(request, currentFormat, requestNumber),
         timestamp: Date.now()
       });
     } else {
@@ -323,6 +280,54 @@ export class SabrStreamingAdapter {
     delete request.headers.Range;
 
     return request;
+  }
+
+  /**
+   * Builds a physical SABR request immediately before it is sent. All dynamic
+   * fields are sampled here so queued requests use state produced by the
+   * previous API response instead of state captured at Shaka request time.
+   */
+  private async materializeSabrRequest(
+    request: PlayerHttpRequest,
+    currentFormat: SabrFormat,
+    requestNumber: string
+  ) {
+    if (this.activeDelayPromise) await this.activeDelayPromise;
+    if (!this.serverAbrStreamingUrl) throw new SabrAdapterError('Server ABR URL not set.');
+
+    /** Clear fallback metadata after a backward seek; real Shaka ranges are read fresh below. */
+    if (this.playerAdapter.getPlayerTime() < this.lastPlayerTimeSecs) {
+      this.initializedFormats.clear();
+    }
+
+    const activeFormats = this.playerAdapter.getActiveTrackFormats(currentFormat, this.sabrFormats);
+    const videoPlaybackAbrRequest = await this.createVideoPlaybackAbrRequest(request, currentFormat, activeFormats);
+
+    if (currentFormat.height) {
+      videoPlaybackAbrRequest.clientAbrState!.stickyResolution = currentFormat.height;
+      videoPlaybackAbrRequest.clientAbrState!.lastManualSelectedResolution = currentFormat.height;
+    }
+
+    this.addBufferingInfoToAbrRequest(videoPlaybackAbrRequest, currentFormat, activeFormats);
+
+    const companionFormat = currentFormat.width ? activeFormats.audioFormat : activeFormats.videoFormat;
+    if (companionFormat) videoPlaybackAbrRequest.selectedFormatIds.push(companionFormat);
+    if (!request.segment.isInit()) videoPlaybackAbrRequest.selectedFormatIds.push(currentFormat);
+
+    this.addPreferredFormatIds(videoPlaybackAbrRequest, this.sabrFormats, currentFormat, activeFormats);
+
+    if (this.options.enableVerboseRequestLogging) {
+      this.logger.debug(TAG, `Materialized VideoPlaybackAbrRequest (${requestNumber}):`, videoPlaybackAbrRequest);
+    }
+
+    const url = new URL(this.serverAbrStreamingUrl);
+    url.searchParams.set('rn', requestNumber);
+    return {
+      url: url.toString(),
+      method: 'POST',
+      headers: request.headers,
+      body: VideoPlaybackAbrRequest.encode(videoPlaybackAbrRequest).finish()
+    };
   }
 
   /**

@@ -37,7 +37,20 @@ export interface SabrRequestMetadata {
   error?: {
     sabrError?: SabrError;
   };
+  /**
+   * Lazily builds the physical SABR request when a player coordinator is ready
+   * to send it. Keeping this as a factory avoids freezing stale player state
+   * while another SABR API call is still active.
+   */
+  materializeRequest?: () => Promise<MaterializedSabrRequest>;
   timestamp: number;
+}
+
+export interface MaterializedSabrRequest {
+  url: string;
+  method: string;
+  headers?: Record<string, string>;
+  body?: ArrayBuffer | ArrayBufferView | null;
 }
 
 export interface SabrOptions {
