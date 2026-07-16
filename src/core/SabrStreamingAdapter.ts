@@ -301,7 +301,7 @@ export class SabrStreamingAdapter {
     }
 
     const activeFormats = this.playerAdapter.getActiveTrackFormats(currentFormat, this.sabrFormats);
-    const videoPlaybackAbrRequest = await this.createVideoPlaybackAbrRequest(request, currentFormat, activeFormats);
+    const videoPlaybackAbrRequest = await this.createVideoPlaybackAbrRequest(request, currentFormat);
 
     if (currentFormat.height) {
       videoPlaybackAbrRequest.clientAbrState!.stickyResolution = currentFormat.height;
@@ -334,17 +334,12 @@ export class SabrStreamingAdapter {
    * Creates a VideoPlaybackAbrRequest object with current playback state information.
    * @param request - The original player HTTP request.
    * @param currentFormat - The format currently being fetched.
-   * @param activeFormats - Object containing references to active audio and video formats.
    * @returns A populated VideoPlaybackAbrRequest object.
    * @throws SabrAdapterError if ustreamer config is not set.
    */
   private async createVideoPlaybackAbrRequest(
     request: PlayerHttpRequest,
-    currentFormat: SabrFormat,
-    activeFormats: {
-      audioFormat?: SabrFormat;
-      videoFormat?: SabrFormat;
-    }
+    currentFormat: SabrFormat
   ): Promise<VideoPlaybackAbrRequest> {
     if (!this.ustreamerConfig) {
       throw new SabrAdapterError('Ustreamer config not set');
@@ -380,8 +375,10 @@ export class SabrStreamingAdapter {
       },
       bufferedRanges: [],
       selectedFormatIds: [],
-      preferredAudioFormatIds: [ activeFormats.audioFormat || {} ],
-      preferredVideoFormatIds: [ activeFormats.videoFormat || {} ],
+      // Filled from the complete filtered format set by addPreferredFormatIds.
+      // Do not emit an empty FormatId while Shaka has no active variant yet.
+      preferredAudioFormatIds: [],
+      preferredVideoFormatIds: [],
       preferredSubtitleFormatIds: [],
       videoPlaybackUstreamerConfig: base64ToU8(this.ustreamerConfig),
       streamerContext,
@@ -398,33 +395,23 @@ export class SabrStreamingAdapter {
       videoFormat?: SabrFormat;
     }
   ) {
-    const allFormats: SabrFormat[] = sabrFormats.filter((item) => {
-      return (
-        item.itag === currentFormat.itag ||
-        item.itag === activeFormats?.audioFormat?.itag ||
-        item.itag === activeFormats?.videoFormat?.itag
-      );
-    });
-
-    const videoIds: FormatId[] = allFormats
-      .filter((item) => item.height != null)
-      .map((item) => {
-        return {
+    const toFormatIds = (formats: SabrFormat[], preferred?: SabrFormat): FormatId[] => {
+      const uniqueFormats = new Map<string, SabrFormat>();
+      for (const format of formats) uniqueFormats.set(fromFormat(format) || '', format);
+      const preferredKey = fromFormat(preferred);
+      return [ ...uniqueFormats.values() ]
+        .sort((a, b) => Number(fromFormat(b) === preferredKey) - Number(fromFormat(a) === preferredKey))
+        .map((item) => ({
           itag: item.itag,
           lastModified: item.lastModified,
           xtags: item.xtags ?? ''
-        };
-      });
+        }));
+    };
 
-    const audioIds: FormatId[] = allFormats
-      .filter((item) => item.height == null)
-      .map((item) => {
-        return {
-          itag: item.itag,
-          lastModified: item.lastModified,
-          xtags: item.xtags ?? ''
-        };
-      });
+    const preferredVideo = activeFormats.videoFormat || (currentFormat.height ? currentFormat : undefined);
+    const preferredAudio = activeFormats.audioFormat || (!currentFormat.height ? currentFormat : undefined);
+    const videoIds = toFormatIds(sabrFormats.filter((item) => item.height != null), preferredVideo);
+    const audioIds = toFormatIds(sabrFormats.filter((item) => item.height == null), preferredAudio);
 
     videoPlaybackAbrRequest.preferredVideoFormatIds = videoIds;
     videoPlaybackAbrRequest.preferredAudioFormatIds = audioIds;
