@@ -107,8 +107,9 @@ export interface RequestSegment {
 }
 
 /**
- * One continuous range that is confirmed to exist in the player's media
- * buffer. Times are milliseconds; tick values use `timescale` when present.
+ * One continuous range that the player adapter considers available for
+ * playback. An adapter may derive this from received segments instead of the
+ * browser SourceBuffer to avoid append-timing races.
  */
 export interface PlayerBufferedRange {
   format: SabrFormat;
@@ -136,8 +137,8 @@ export interface SabrPlayerAdapter {
   getPlaybackRate(): number;
   getBandwidthEstimate(): number;
   /**
-   * Returns ranges actually appended to the player, not merely downloaded or
-   * cached segments. Optional for compatibility with older player adapters.
+   * Returns ranges considered available by the player adapter. Optional for
+   * compatibility with older player adapters.
    */
   getBufferedRanges?(formats: SabrFormat[]): PlayerBufferedRange[];
   getActiveTrackFormats(activeFormat: SabrFormat, sabrFormats: SabrFormat[]): {
