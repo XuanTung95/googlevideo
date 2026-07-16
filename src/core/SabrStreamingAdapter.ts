@@ -383,7 +383,11 @@ export class SabrStreamingAdapter {
         clientViewportIsFlexible: false,
         bandwidthEstimate: Math.round(this.playerAdapter.getBandwidthEstimate() || 0),
         drcEnabled: currentFormat?.isDrc ?? false,
-        enabledTrackTypesBitfield: currentFormat.width ? EnabledTrackTypes.VIDEO_ONLY : EnabledTrackTypes.AUDIO_ONLY,
+        // Shaka consumes separate audio and video requests, but one physical
+        // SABR response is shared by the coordinator. Keep both track types
+        // enabled so an audio-led init request may also return the preferred
+        // video init segment (and vice versa).
+        enabledTrackTypesBitfield: EnabledTrackTypes.VIDEO_AND_AUDIO,
         audioTrackId: currentFormat.audioTrackId
       },
       bufferedRanges: [],
