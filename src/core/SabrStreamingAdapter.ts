@@ -311,8 +311,13 @@ export class SabrStreamingAdapter {
     this.addBufferingInfoToAbrRequest(videoPlaybackAbrRequest, currentFormat, activeFormats);
 
     const companionFormat = currentFormat.width ? activeFormats.audioFormat : activeFormats.videoFormat;
-    if (companionFormat) videoPlaybackAbrRequest.selectedFormatIds.push(companionFormat);
-    if (!request.segment.isInit()) videoPlaybackAbrRequest.selectedFormatIds.push(currentFormat);
+    // Init requests only initialize a byte-range/format and must not claim any
+    // media format has already been selected. selectedFormatIds becomes valid
+    // only for media requests after initialization data is available.
+    if (!request.segment.isInit()) {
+      this.addSelectedFormat(videoPlaybackAbrRequest, currentFormat);
+      if (companionFormat) this.addSelectedFormat(videoPlaybackAbrRequest, companionFormat);
+    }
 
     this.addPreferredFormatIds(videoPlaybackAbrRequest, this.sabrFormats, currentFormat, activeFormats);
 
@@ -328,6 +333,14 @@ export class SabrStreamingAdapter {
       headers: request.headers,
       body: VideoPlaybackAbrRequest.encode(videoPlaybackAbrRequest).finish()
     };
+  }
+
+  /** Adds one selected media format exactly once, keyed by itag + xtags. */
+  private addSelectedFormat(request: VideoPlaybackAbrRequest, format: SabrFormat): void {
+    const key = fromFormat(format);
+    if (!request.selectedFormatIds.some((selected) => fromFormat(selected) === key)) {
+      request.selectedFormatIds.push(format);
+    }
   }
 
   /**
