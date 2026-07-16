@@ -93,6 +93,23 @@ export interface RequestSegment {
   isInit: () => boolean;
 }
 
+/**
+ * One continuous range that is confirmed to exist in the player's media
+ * buffer. Times are milliseconds; tick values use `timescale` when present.
+ */
+export interface PlayerBufferedRange {
+  format: SabrFormat;
+  startSequenceNumber: number;
+  endSequenceNumber: number;
+  startTimeMs: number;
+  durationMs: number;
+  timeRange?: {
+    startTicks?: number;
+    durationTicks?: number;
+    timescale?: number;
+  };
+}
+
 export type RequestFilter = (request: PlayerHttpRequest) => Promise<PlayerHttpRequest | undefined> | PlayerHttpRequest | undefined;
 export type ResponseFilter = (response: PlayerHttpResponse) => Promise<PlayerHttpResponse | undefined> | PlayerHttpResponse | undefined;
 
@@ -105,6 +122,11 @@ export interface SabrPlayerAdapter {
   getPlayerTime(): number;
   getPlaybackRate(): number;
   getBandwidthEstimate(): number;
+  /**
+   * Returns ranges actually appended to the player, not merely downloaded or
+   * cached segments. Optional for compatibility with older player adapters.
+   */
+  getBufferedRanges?(formats: SabrFormat[]): PlayerBufferedRange[];
   getActiveTrackFormats(activeFormat: SabrFormat, sabrFormats: SabrFormat[]): {
     audioFormat?: SabrFormat;
     videoFormat?: SabrFormat;

@@ -23,6 +23,7 @@ import {
 import type {
   PlayerHttpRequest,
   PlayerHttpResponse, 
+  PlayerBufferedRange,
   SabrOptions,
   SabrPlayerAdapter
 } from '../types/sabrStreamingAdapterTypes.js';
@@ -37,6 +38,11 @@ interface InitializedFormat {
     startTimeMs: string;
     durationMs: string;
     timescale: number;
+    timeRange?: {
+      startTicks?: number;
+      durationTicks?: number;
+      timescale?: number;
+    };
   };
 }
 
@@ -243,10 +249,14 @@ export class SabrStreamingAdapter {
         videoPlaybackAbrRequest.clientAbrState!.lastManualSelectedResolution = currentFormat.height;
       }
 
-      const formatToDiscard = this.addBufferingInfoToAbrRequest(videoPlaybackAbrRequest, currentFormat, activeFormats);
+      this.addBufferingInfoToAbrRequest(videoPlaybackAbrRequest, currentFormat, activeFormats);
 
-      if (formatToDiscard) {
-        videoPlaybackAbrRequest.selectedFormatIds.push(formatToDiscard);
+      // A SABR call should request the current track plus its active companion
+      // (audio for a video request, video for an audio request). Do not select an
+      // old rendition of the same track during a quality/language switch.
+      const companionFormat = currentFormat.width ? activeFormats.audioFormat : activeFormats.videoFormat;
+      if (companionFormat) {
+        videoPlaybackAbrRequest.selectedFormatIds.push(companionFormat);
       }
 
       if (!request.segment.isInit()) {
@@ -431,39 +441,50 @@ export class SabrStreamingAdapter {
    * @param videoPlaybackAbrRequest - The ABR request to modify with buffering information.
    * @param currentFormat - The format currently being requested.
    * @param activeFormats - References to the currently active audio and video formats.
-   * @returns The format to discard (if any) - typically formats that are active but not currently requested.
    */
   private addBufferingInfoToAbrRequest(
     videoPlaybackAbrRequest: VideoPlaybackAbrRequest,
     currentFormat: SabrFormat,
     activeFormats: { audioFormat?: SabrFormat; videoFormat?: SabrFormat }
   ) {
-    let formatToDiscard: SabrFormat | undefined;
+    const relevantFormats = [ currentFormat, ...Object.values(activeFormats).filter((format): format is SabrFormat => !!format) ];
+    const playerBufferedRanges = this.playerAdapter.getBufferedRanges?.(relevantFormats);
 
-    const currentFormatKey = fromFormat(currentFormat);
+    if (playerBufferedRanges) {
+      for (const range of playerBufferedRanges) {
+        videoPlaybackAbrRequest.bufferedRanges.push(this.toProtocolBufferedRange(range));
+      }
+    }
 
     for (const activeFormat of Object.values(activeFormats)) {
       if (!activeFormat) continue;
 
       const activeFormatKey = fromFormat(activeFormat);
-      const shouldDiscard = currentFormatKey !== activeFormatKey;
-      const initializedFormat = this.initializedFormats.get(activeFormatKey || '');
-      
-      const forceDisable = false;
-      const bufferedRange = (shouldDiscard && forceDisable)
-        ? this.createFullBufferRange(activeFormat)
-        : this.createPartialBufferRange(initializedFormat);
-
-      if (bufferedRange) {
-        videoPlaybackAbrRequest.bufferedRanges.push(bufferedRange);
-
-        if (shouldDiscard) {
-          formatToDiscard = activeFormat;
-        }
+      // Older player adapters do not expose real SourceBuffer ranges. Preserve
+      // the previous last-segment fallback only for those adapters.
+      if (!playerBufferedRanges) {
+        const initializedFormat = this.initializedFormats.get(activeFormatKey || '');
+        const bufferedRange = this.createPartialBufferRange(initializedFormat);
+        if (bufferedRange) videoPlaybackAbrRequest.bufferedRanges.push(bufferedRange);
       }
-    }
 
-    return formatToDiscard;
+    }
+  }
+
+  /** Converts an actual player-buffer range into the SABR protobuf shape. */
+  private toProtocolBufferedRange(range: PlayerBufferedRange): BufferedRange {
+    return {
+      formatId: range.format,
+      startSegmentIndex: range.startSequenceNumber,
+      endSegmentIndex: range.endSequenceNumber,
+      startTimeMs: range.startTimeMs,
+      durationMs: range.durationMs,
+      timeRange: range.timeRange ? {
+        startTicks: range.timeRange.startTicks,
+        durationTicks: range.timeRange.durationTicks,
+        timescale: range.timeRange.timescale
+      } : undefined
+    };
   }
 
   /**
@@ -495,19 +516,23 @@ export class SabrStreamingAdapter {
   private createPartialBufferRange(initializedFormat?: InitializedFormat): BufferedRange | null {
     if (!initializedFormat?.lastSegmentMetadata) return null;
 
-    const { formatId, startSequenceNumber, timescale, durationMs, endSequenceNumber } =
+    const { formatId, startSequenceNumber, startTimeMs, timescale, durationMs, endSequenceNumber, timeRange } =
       initializedFormat.lastSegmentMetadata;
 
     return {
       formatId,
       startSegmentIndex: startSequenceNumber,
       durationMs: Number(durationMs),
-      startTimeMs: 0,
+      startTimeMs: Number(startTimeMs),
       endSegmentIndex: endSequenceNumber,
-      timeRange: {
+      timeRange: timeRange ? {
+        timescale: timeRange.timescale,
+        startTicks: timeRange.startTicks,
+        durationTicks: timeRange.durationTicks
+      } : {
         timescale,
-        startTicks: 0,
-        durationTicks: Number(durationMs)
+        startTicks: Math.round(Number(startTimeMs) * timescale / 1000),
+        durationTicks: Math.round(Number(durationMs) * timescale / 1000)
       }
     };
   }
@@ -631,7 +656,8 @@ export class SabrStreamingAdapter {
         endSequenceNumber: streamInfo.mediaHeader.sequenceNumber || 1,
         startTimeMs: streamInfo.mediaHeader.startMs?.toString() || '0',
         durationMs: streamInfo.mediaHeader.durationMs?.toString() || '0',
-        timescale: streamInfo.mediaHeader.timeRange?.timescale || 1000
+        timescale: streamInfo.mediaHeader.timeRange?.timescale || 1000,
+        timeRange: streamInfo.mediaHeader.timeRange
       };
 
       this.initializedFormats.set(formatKey, initializedFormat);
