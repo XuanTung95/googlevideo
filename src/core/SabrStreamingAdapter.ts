@@ -303,9 +303,13 @@ export class SabrStreamingAdapter {
     const activeFormats = this.playerAdapter.getActiveTrackFormats(currentFormat, this.sabrFormats);
     const videoPlaybackAbrRequest = await this.createVideoPlaybackAbrRequest(request, currentFormat);
 
-    if (currentFormat.height) {
-      videoPlaybackAbrRequest.clientAbrState!.stickyResolution = currentFormat.height;
-      videoPlaybackAbrRequest.clientAbrState!.lastManualSelectedResolution = currentFormat.height;
+    // Audio may lead the physical request, so derive the chosen resolution
+    // from the active companion video instead of only from currentFormat.
+    const selectedResolution = activeFormats.videoFormat?.height || currentFormat.height;
+    if (selectedResolution) {
+      videoPlaybackAbrRequest.clientAbrState!.stickyResolution = selectedResolution;
+      videoPlaybackAbrRequest.clientAbrState!.lastManualSelectedResolution = selectedResolution;
+      videoPlaybackAbrRequest.clientAbrState!.av1QualityThreshold = Math.max(selectedResolution, 1080);
     }
 
     this.addBufferingInfoToAbrRequest(videoPlaybackAbrRequest, currentFormat, activeFormats);
@@ -378,11 +382,26 @@ export class SabrStreamingAdapter {
 
     return {
       clientAbrState: {
+        // State sampled by the concrete player at materialization time. Core
+        // fields below intentionally override adapter-provided duplicates.
+        ...this.playerAdapter.getClientAbrState?.(),
         playbackRate: this.playerAdapter.getPlaybackRate(),
         playerTimeMs: Math.round((request.segment.getStartTime() ?? this.lastPlayerTimeSecs) * 1000),
         clientViewportIsFlexible: false,
         bandwidthEstimate: Math.round(this.playerAdapter.getBandwidthEstimate() || 0),
         drcEnabled: currentFormat?.isDrc ?? false,
+        disableStreamingXhr: false,
+        enableVoiceBoost: false,
+        isPrefetch: false,
+        sabrForceMaxNetworkInterruptionDurationMs: 7606,
+        field71: 1,
+        playbackAuthorization: {
+          authorizedFormats: [
+            { trackType: 1, isHdr: false },
+            { trackType: 2, isHdr: false },
+            { trackType: 2, isHdr: true }
+          ]
+        },
         // Shaka consumes separate audio and video requests, but one physical
         // SABR response is shared by the coordinator. Keep both track types
         // enabled so an audio-led init request may also return the preferred

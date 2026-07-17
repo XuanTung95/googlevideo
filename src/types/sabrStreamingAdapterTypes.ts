@@ -1,4 +1,5 @@
 import type {
+  ClientAbrState,
   ClientInfo,
   FormatInitializationMetadata,
   MediaHeader,
@@ -136,6 +137,11 @@ export interface SabrPlayerAdapter {
   getPlayerTime(): number;
   getPlaybackRate(): number;
   getBandwidthEstimate(): number;
+  /**
+   * Returns browser/player state that the generic SABR adapter cannot observe
+   * itself (viewport, visibility, seek/action clocks, and network type).
+   */
+  getClientAbrState?(): Partial<ClientAbrState>;
   /**
    * Returns ranges considered available by the player adapter. Optional for
    * compatibility with older player adapters.
