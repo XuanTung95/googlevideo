@@ -331,6 +331,9 @@ export class SabrStreamingAdapter {
 
     const url = new URL(this.serverAbrStreamingUrl);
     url.searchParams.set('rn', requestNumber);
+    if ((window as any).testMode) {
+      console.warn(`[AbrRequest] (${requestNumber}):`, videoPlaybackAbrRequest, url, request.headers);
+    }
     return {
       url: url.toString(),
       method: 'POST',
